@@ -1,5 +1,9 @@
 # C64 v10k4c
 
+![C64 effect preview](docs/preview.png)
+
+Visual preview asset for this effect; run the VICE command below for an emulator capture.
+
 Text-mode PAL C64 demo with a character-graphics banner, smooth scroller, and
 SID pulse arpeggio.
 
