@@ -28,3 +28,7 @@ x64sc -autostart build/c64_chargfx_sid_arpeggio.prg
 The missing `SID_Tick` routine and charset dependency were restored. Shadow-row
 arguments and centered-row state are now preserved; the `SYS 6144` contract is
 unchanged.
+## Documentation and license
+
+Function-level documentation is in docs/FUNCTIONS.md. The project is released
+under GPL-3.0; see LICENSE.
