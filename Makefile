@@ -1,8 +1,8 @@
 .PHONY: all clean
 
 ACME ?= acme
-OUTPUT := build/deepseek_c64_v10k4c.prg
-SOURCE := deepseek_c64_v10k4c.s
+OUTPUT := build/c64_chargfx_sid_arpeggio.prg
+SOURCE := c64_chargfx_sid_arpeggio.s
 
 all: $(OUTPUT)
 

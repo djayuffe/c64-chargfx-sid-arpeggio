@@ -1,10 +1,10 @@
 
-; deepseek_c64_v10k4c.s
+; c64_chargfx_sid_arpeggio.s
 ; Text-mode only, PAL-safe. Single raster IRQ (chained to KERNAL).
 ; Uses your custom charset at $1000 and draws a char-gfx banner (double row + shadow).
 ; Smooth bottom scroller + tiny SID arpeggio.
 ; BASIC stub -> RUN (SYS6144).
-; Build with the checked-in charset: acme --strict-segments -I . -f cbm -o deepseek_c64_deepseek_c64_v10k4c.prg deepseek_c64_v10k4c.s
+; Build with the checked-in charset: acme --strict-segments -I . -f cbm -o c64_chargfx_sid_arpeggio.prg c64_chargfx_sid_arpeggio.s
 
 ; ---------------- BASIC stub: 10 SYS6144 ----------------
 * = $0801
