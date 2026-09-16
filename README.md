@@ -1,4 +1,4 @@
-# C64 v10k4c
+# C64 - Character FX SID Arpeggio
 
 ![C64 effect preview](docs/preview.png)
 
