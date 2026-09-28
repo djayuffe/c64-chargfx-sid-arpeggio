@@ -1,5 +1,7 @@
 
 ; c64_chargfx_sid_arpeggio.s
+; Copyright (C) 2026 Ulf Bertilsson
+; SPDX-License-Identifier: GPL-3.0-only
 ; Text-mode only, PAL-safe. Single raster IRQ (chained to KERNAL).
 ; Uses your custom charset at $1000 and draws a char-gfx banner (double row + shadow).
 ; Smooth bottom scroller + tiny SID arpeggio.
@@ -30,30 +32,42 @@ CIA2_PRA    = $dd00
 
 SCREEN      = $0400
 COLOR       = $d800
+SCREEN_WIDTH = 40
+SCREEN_ROWS = 25
+SCROLLER_ROW = 21
+IRQ_RASTER = 48
+AFTER_BARS_RASTER = 178
+SCROLLER_RASTER = 210
+BAR_COUNT = 16
+COLOR_BLACK = 0
+COLOR_WHITE = 1
+COLOR_YELLOW = 7
+COLOR_GREY = 14
 
 ; ---------------- Zero Page ----------------
 ZP_SrcLo    = $fb
 ZP_SrcHi    = $fc
 ZP_DstLo    = $fd
 ZP_DstHi    = $fe
-ZP_Tmp      = $ff
-
-; ---------------- Small vars ----------------
-FrameCount  = $033a
-ScrIdx      = $033b
-Smooth      = $033c
-LenTmp      = $033d
-ArpIdx      = $033e
-RowTmp      = $033f
 
 ; ---------------- Tables ----------------
 * = $0C00
-RowScrLo:  !for i,0,24 { !byte <(SCREEN + i*40) }
-RowScrHi:  !for i,0,24 { !byte >(SCREEN + i*40) }
-RowColLo:  !for i,0,24 { !byte <(COLOR  + i*40) }
-RowColHi:  !for i,0,24 { !byte >(COLOR  + i*40) }
+RowScrLo:  !for i,0,24 { !byte <(SCREEN + i*SCREEN_WIDTH) }
+RowScrHi:  !for i,0,24 { !byte >(SCREEN + i*SCREEN_WIDTH) }
+RowColLo:  !for i,0,24 { !byte <(COLOR  + i*SCREEN_WIDTH) }
+RowColHi:  !for i,0,24 { !byte >(COLOR  + i*SCREEN_WIDTH) }
 RasterLines: !byte 50,58,66,74,82,90,98,106,114,122,130,138,146,154,162,170
 BarColors:   !byte 2,6,3,1,3,6,2,0,2,6,3,1,3,6,2,0
+
+; Keep mutable state in memory owned by the program.  The earlier $033a-$033f
+; placement overlapped KERNAL workspace/cassette-buffer storage.
+FrameCount:  !byte 0
+ScrIdx:      !byte 0
+Smooth:      !byte 7
+LenTmp:      !byte 0
+ArpIdx:      !byte 0
+RowTmp:      !byte 0
+ColorTmp:    !byte 0
 
 ; ---------------- Custom charset (embedded at $1000) ----------------
 * = $1000
@@ -79,10 +93,21 @@ Start:
     sta MEMPTR
 
     ; Video setup
-    lda #$1b
+    ; 25 rows, screen on, zero vertical fine-scroll: keep 8x8 glyphs aligned.
+    lda #$18
     sta CTRL1
     lda #$08
     sta CTRL2
+
+    ; Do not inherit colors or animation state from the loading environment.
+    lda #COLOR_BLACK
+    sta BORDERCOL
+    sta BGCOL
+    sta FrameCount
+    sta ScrIdx
+    sta ArpIdx
+    lda #7
+    sta Smooth
 
     ; Clear
     jsr ClearScreen
@@ -91,14 +116,18 @@ Start:
     ; Draw char-gfx banner (double row + shadow)
     jsr DrawBannerCharGfx
 
+    ; Initialize audio before arming interrupts, so the first raster event
+    ; always starts from a fully initialized machine state.
+    jsr SID_Init
+
     ; IRQ install
-    lda VICIRQFLAG
+    lda #$0f
     sta VICIRQFLAG
     lda #<IRQ_Handler
     sta $0314
     lda #>IRQ_Handler
     sta $0315
-    lda #50
+    lda #IRQ_RASTER
     sta RASTER
     lda CTRL1
     and #$7f
@@ -106,76 +135,88 @@ Start:
     lda #$01
     sta VICIRQEN
 
-    ; Init scroller + SID
-    lda #0
-    sta ScrIdx
-    lda #7
-    sta Smooth
-    jsr SID_Init
-
     cli
 Forever:
     jmp Forever
 
 ; ---------------- Char-GFX banner (double row with shadow) ----------------
+; The deterministic custom charset contains the readable banner and scroller
+; glyphs used below.
 Banner1: !scr " UBER CREW "
 !byte 0
 Banner2: !scr "  2025  "
 !byte 0
 
 DrawBannerCharGfx:
-    ; Top line row 7 (white)
-    lda #7
+    ; The title starts below the raster field, on the restored black background.
+    ; This keeps its character graphics and shadow legible at every bar phase.
+    ; Top line row 16 (yellow)
     lda #<Banner1
     sta ZP_SrcLo
     lda #>Banner1
     sta ZP_SrcHi
-    lda #7
+    lda #16
     jsr CenterPrintRow
-    ; Shadow row 8 (grey)
-    lda #8
+    ldx #COLOR_YELLOW
+    lda #16
+    jsr ColorCenteredRow
+    ; Shadow row 17 (grey)
     lda #<Banner1
     sta ZP_SrcLo
     lda #>Banner1
     sta ZP_SrcHi
-    lda #8
-    jsr ColorCenteredRowGrey
-    ; Second line row 9 (white)
-    lda #9
-    lda #<Banner2
-    sta ZP_SrcLo
-    lda #>Banner2
-    sta ZP_SrcHi
-    lda #9
+    lda #17
     jsr CenterPrintRow
-    ; Shadow row 10 (grey)
-    lda #10
+    ldx #COLOR_GREY
+    lda #17
+    jsr ColorCenteredRow
+    ; Second line row 18 (yellow)
     lda #<Banner2
     sta ZP_SrcLo
     lda #>Banner2
     sta ZP_SrcHi
-    lda #10
-    jsr ColorCenteredRowGrey
+    lda #18
+    jsr CenterPrintRow
+    ldx #COLOR_YELLOW
+    lda #18
+    jsr ColorCenteredRow
+    ; Shadow row 19 (grey)
+    lda #<Banner2
+    sta ZP_SrcLo
+    lda #>Banner2
+    sta ZP_SrcHi
+    lda #19
+    jsr CenterPrintRow
+    ldx #COLOR_GREY
+    lda #19
+    jsr ColorCenteredRow
     rts
 
-; Color the centered span for the string pointer (ZP_SrcLo/Hi) on given row in A with grey (color 14).
-ColorCenteredRowGrey:
+; Color the centered span for the string pointer (ZP_SrcLo/Hi).
+; In: A=row, X=color.
+ColorCenteredRow:
+    cmp #SCREEN_ROWS
+    bcc @validrow
+    rts
+@validrow:
     sta RowTmp
-    tay
+    stx ColorTmp
     ; compute length -> LenTmp
     ldy #0
 @len:
+    cpy #SCREEN_WIDTH
+    beq @got
     lda (ZP_SrcLo),y
     beq @got
     iny
     bne @len
 @got:
     sty LenTmp
-    ; start = (40 - len)/2
+    ; start = (SCREEN_WIDTH - len)/2
     tya
     eor #$ff
     clc
-    adc #41
+    adc #SCREEN_WIDTH+1
     lsr
     tax
     ; color row base -> ZP_Dst
@@ -194,7 +235,7 @@ ColorCenteredRowGrey:
     bne @adv
 @paint:
     ldy #0
-    lda #14
+    lda ColorTmp
 @loop:
     cpy LenTmp
     beq @done
@@ -207,6 +248,10 @@ ColorCenteredRowGrey:
 ; ---------------- Centered text (row in A) ----------------
 ; In: A=row, (ZP_SrcLo/ZP_SrcHi)=ptr to 0-terminated text
 CenterPrintRow:
+    cmp #SCREEN_ROWS
+    bcc @validrow
+    rts
+@validrow:
     tay
     ; row base -> ZP_DstLo/Hi
     lda RowScrLo,y
@@ -216,17 +261,19 @@ CenterPrintRow:
     ; compute length in LenTmp
     ldy #0
 @len:
+    cpy #SCREEN_WIDTH
+    beq @got
     lda (ZP_SrcLo),y
     beq @got
     iny
     bne @len
 @got:
     sty LenTmp
-    ; start = (40 - len)/2
+    ; start = (SCREEN_WIDTH - len)/2
     tya
     eor #$ff
     clc
-    adc #41
+    adc #SCREEN_WIDTH+1
     lsr
     tax
 @adv:
@@ -256,38 +303,64 @@ IRQ_Handler:
     beq .chain
 
     ; ACK
-    lda VICIRQFLAG
+    lda #$01
     sta VICIRQFLAG
 
-    pha
-    txa : pha
-    tya : pha
+    ; The KERNAL hardware-IRQ trampoline at $FF48 has already saved A/X/Y.
+    ; $EA31 restores those original registers when the chained handler exits.
 
     inc FrameCount
-    jsr SID_Tick
 
-    ; Bars: update background color at scheduled lines
+    ; Fine scrolling is a screen-wide VIC-II setting.  Reset it before the
+    ; active display begins; Scroller_Tick enables it again below the banner.
+    lda #$08
+    sta CTRL2
+
+    ; Trigger two lines early, then draw each band on its exact scheduled line.
+    ; The 8-line spacing leaves ample time for the short color update.
     ldx #0
 @nextbar:
-@w1: lda RASTER
-    cmp RasterLines,x
-    bne @w1
-@w2: lda CTRL1
-    bpl @w2
-    lda FrameCount
+    txa
+    clc
+    adc FrameCount
     and #$0f
     tay
     lda BarColors,y
-    sta BGCOL
+    tay
+@waitbar:
+    lda RASTER
+    cmp RasterLines,x
+    bcc @waitbar
+    ; Y already contains the next color, minimizing line-start latency and
+    ; keeping the transition in the left border rather than across the screen.
+    sty BGCOL
     inx
-    cpx #16
+    cpx #BAR_COUNT
     bne @nextbar
+@barsdone:
+    ; Restore the normal background after the final band rather than letting
+    ; its color bleed through the lower screen and into the next frame.
+@waitend:
+    lda RASTER
+    cmp #AFTER_BARS_RASTER
+    bcc @waitend
+    lda #0
+    sta BGCOL
+
+    jsr SID_Tick
+
+    ; Do not set the global D016 fine-scroll until just before row 21.  The
+    ; title rows above remain stationary while the bottom row scrolls smoothly.
+@waitscroll:
+    lda RASTER
+    cmp #SCROLLER_RASTER
+    bcc @waitscroll
 
     ; Scroller tick (row 21)
     jsr Scroller_Tick
 
     ; Arm next frame
-    lda #50
+    lda #IRQ_RASTER
     sta RASTER
     lda CTRL1
     and #$7f
@@ -295,9 +368,6 @@ IRQ_Handler:
     lda #$01
     sta VICIRQEN
 
-    pla : tay
-    pla : tax
-    pla
 .chain:
     jmp $ea31
 
@@ -305,7 +375,9 @@ IRQ_Handler:
 ScrollTxt:
 !scr "  UBER CREW 2025  -  GREETINGS TO: NTEB DOMUS JSWIKI ULF MAGNUS THOMAS ALEKS  "
 !scr "  C64 FOREVER  "
+ScrollTxtEnd:
 !byte 0
+ScrollTxtLength = ScrollTxtEnd - ScrollTxt
 
 Scroller_Tick:
     lda Smooth
@@ -322,26 +394,35 @@ Scroller_Tick:
     sta CTRL2
     ldx #0
 @mv:
-    lda SCREEN+21*40+1,x
-    sta SCREEN+21*40+0,x
+    lda SCREEN+SCROLLER_ROW*SCREEN_WIDTH+1,x
+    sta SCREEN+SCROLLER_ROW*SCREEN_WIDTH+0,x
     inx
-    cpx #39
+    cpx #SCREEN_WIDTH-1
     bne @mv
     ldx ScrIdx
-    lda ScrollTxt,x
-    bne @ok
+    cpx #ScrollTxtLength
+    bcc @ok
     ldx #0
-    lda ScrollTxt,x
 @ok:
-    sta SCREEN+21*40+39
+    lda ScrollTxt,x
+    sta SCREEN+SCROLLER_ROW*SCREEN_WIDTH+SCREEN_WIDTH-1
     inx
     stx ScrIdx
-    lda #1
-    sta COLOR+21*40+39
+    lda #COLOR_WHITE
+    sta COLOR+SCROLLER_ROW*SCREEN_WIDTH+SCREEN_WIDTH-1
     rts
 
 ; ---------------- SID (voice 1 pulse arpeggio, louder) ----------------
 SID_Init:
+    ; Clear every SID register so stale voices/filter state from a previously
+    ; running program cannot leak into this effect.
+    lda #0
+    ldx #$18
+@clear:
+    sta $d400,x
+    dex
+    bpl @clear
+
     ; Master volume
     lda #$0f
     sta $d418
@@ -376,9 +457,15 @@ SID_Init:
 NoteLo: !byte <$11ED, <$0FEA, <$0E10
 NoteHi: !byte >$11ED, >$0FEA, >$0E10
 ArpSeq: !byte 0,1,2,0,1,2,0,1,2,0,1,2,0,1,2,0
+ArpSeqEnd:
+ArpSeqLength = ArpSeqEnd - ArpSeq
 
 SID_Tick:
     ldx ArpIdx
+    cpx #ArpSeqLength
+    bcc @valid
+    ldx #0
+@valid:
     lda ArpSeq,x
     tay
     lda NoteLo,y
@@ -388,9 +475,11 @@ SID_Tick:
     lda #$41
     sta $d404
     inx
-    txa
-    and #$0f
-    sta ArpIdx
+    cpx #ArpSeqLength
+    bcc @store
+    ldx #0
+@store:
+    stx ArpIdx
     rts
 
 ; ---------------- Clear helpers ----------------
@@ -409,7 +498,7 @@ ClearScreen:
     rts
 
 ClearColor:
-    lda #$01
+    lda #COLOR_WHITE
     ldx #0
 @cc1: sta $d800,x
     sta $d900,x
